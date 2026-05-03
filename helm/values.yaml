@@ -1,13 +1,9 @@
-cluster:
-  enabled: true
-
-redis:
-  replicas: 3
-
-auth:
+haproxy:
   enabled: false
 
-image:
-  registry: docker.io
-  repository: redis
-  tag: "7.2"
+redis:
+  masterGroupName: redis-ha
+
+replicas: 3
+
+auth: false
