@@ -132,21 +132,48 @@ kubectl get pods -n redis-helm --context kind-redis-helm
 
 ## Self-Healing Test
 
-**Operator** — kill a leader, watch it recover automatically:
+### Commands
+
+**Operator** — seed a key, kill a leader, verify recovery:
 
 ```bash
+kubectl exec -it redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
+  -- redis-cli set testkey "value"
+
 kubectl delete pod redis-cluster-leader-0 -n ot-operators --context kind-redis-test
 kubectl get pods -n ot-operators --context kind-redis-test -w
+
 kubectl exec -it redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
   -- redis-cli cluster nodes
 ```
 
-**Helm** — kill master, sentinel promotes but cluster state may be broken:
+**Helm** — kill master, watch sentinel promote:
 
 ```bash
 kubectl delete pod redis-ha-server-0 -n redis-helm --context kind-redis-helm
 kubectl get pods -n redis-helm --context kind-redis-helm -w
+
+kubectl exec redis-ha-server-1 -n redis-helm --context kind-redis-helm \
+  -c sentinel -- redis-cli -p 26379 sentinel masters
 ```
+
+---
+
+### Results (observed)
+
+**Operator:**
+- Pod recovered in ~19 seconds
+- follower-0 promoted to master automatically
+- leader-0 came back as slave
+- Data redirected via `MOVED` — cluster protocol handles it, client follows automatically
+- Zero manual intervention
+
+**Helm HA:**
+- server-0 restarted by Kubernetes
+- Sentinel negotiated new master among remaining pods
+- Recovery slower — sentinel needs election timeout before promoting
+- No cluster slot management (HA mode, not cluster mode)
+- If sentinel quorum fails — manual `redis-cli sentinel failover` needed
 
 ---
 
