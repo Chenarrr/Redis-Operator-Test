@@ -1,0 +1,9 @@
+cluster:
+  enabled: true
+  slaveCount: 1
+
+redis:
+  replicas: 3
+
+auth:
+  enabled: false
