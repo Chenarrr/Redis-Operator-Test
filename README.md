@@ -1,54 +1,78 @@
-# Redis Operator Local Test
+# Redis Operator vs Helm — Local Test
 
-Testing Redis Operator self-healing on a local kind cluster.
+Comparing Redis Operator self-healing against plain Bitnami Helm chart on local kind clusters.
 
 ## Requirements
 
-- Docker
-- kind — `brew install kind`
-- kubectl
-- helm — `brew install helm`
-
-## Setup
+- Docker, kind, kubectl, helm
 
 ```bash
-# Create cluster (1 control-plane + 3 workers)
-kind create cluster --name redis-test --config kind-config.yaml
+brew install kind helm
+```
 
-# Install operator
+## Structure
+
+```
+operator/   — Redis Operator (ot-container-kit), cluster: redis-test
+helm/       — Bitnami Redis cluster, cluster: redis-helm
+```
+
+---
+
+## Operator Setup (`operator/`)
+
+```bash
+kind create cluster --name redis-test --config operator/kind-config.yaml
+
 helm repo add ot-helm https://ot-container-kit.github.io/helm-charts/
 helm repo update
 helm install redis-operator ot-helm/redis-operator \
-  --namespace ot-operators \
-  --create-namespace \
+  --namespace ot-operators --create-namespace \
   --set featureGates.GenerateConfigInInitContainer=true
 
-# Deploy Redis cluster (operator creates 3 leaders + 3 followers automatically)
-kubectl apply -f redis-cluster.yaml
-```
-
-## Verify
-
-```bash
+kubectl apply -f operator/redis-cluster.yaml
 kubectl get pods -n ot-operators
-kubectl exec -it redis-cluster-leader-0 -n ot-operators -- redis-cli cluster nodes
 ```
 
-## Test Self-Healing
+## Helm Setup (`helm/`)
 
 ```bash
-# Kill a leader
+kind create cluster --name redis-helm --config helm/kind-config.yaml
+
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo update
+helm install redis-helm bitnami/redis-cluster \
+  --namespace redis-helm --create-namespace \
+  -f helm/values.yaml
+
+kubectl get pods -n redis-helm
+```
+
+---
+
+## Self-Healing Test
+
+Kill a master in each and compare:
+
+**Operator** — auto recovers, promotes replica, re-joins pod as slave:
+```bash
 kubectl delete pod redis-cluster-leader-0 -n ot-operators
-
-# Watch operator recover it
-kubectl get pods -n ot-operators
-
-# Check promotion — follower may have become master
+kubectl get pods -n ot-operators -w
 kubectl exec -it redis-cluster-leader-0 -n ot-operators -- redis-cli cluster nodes
 ```
+
+**Helm** — pod restarts but cluster may need manual fix:
+```bash
+kubectl delete pod redis-helm-redis-cluster-0 -n redis-helm
+kubectl get pods -n redis-helm -w
+kubectl exec -it redis-helm-redis-cluster-0 -n redis-helm -- redis-cli cluster nodes
+```
+
+---
 
 ## Cleanup
 
 ```bash
 kind delete cluster --name redis-test
+kind delete cluster --name redis-helm
 ```
