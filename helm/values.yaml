@@ -4,7 +4,7 @@ haproxy:
 redis:
   masterGroupName: redis-ha
 
-replicas: 2
+replicas: 3
 
 auth: false
 

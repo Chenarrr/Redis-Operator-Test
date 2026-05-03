@@ -4,10 +4,10 @@ metadata:
   name: redis-cluster
   namespace: ot-operators
 spec:
-  clusterSize: 2
+  clusterSize: 3
   clusterVersion: v7
   redisFollower:
-    replicas: 2
+    replicas: 3
   podSecurityContext:
     runAsUser: 1000
     fsGroup: 1000
