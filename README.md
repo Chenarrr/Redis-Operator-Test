@@ -1,105 +1,213 @@
-# Redis Operator vs Helm — Local Test
+# Redis Operator vs Bitnami Helm — PoC
 
-Comparing Redis Operator self-healing against a plain Helm chart on local kind clusters.
-
----
-
-## The Three Approaches
-
-### 1. Bitnami Redis Cluster (industry standard — now paywalled)
-
-What your supervisor used. Bitnami's `redis-cluster` Helm chart deployed Redis in
-**Cluster mode** — data split across 3 masters using hash slots, each with 1 replica.
-
-```
-master-0  →  slots 0–5460      + replica
-master-1  →  slots 5461–10922  + replica
-master-2  →  slots 10923–16383 + replica
-```
-
-Bitnami pulled all free images on **August 28, 2025**. Everything moved behind a paid
-subscription. Old tags deleted. Can't use it without paying.
+Proof of concept comparing Redis self-healing between the **ot-container-kit Redis Operator**
+and the **Bitnami Redis Cluster Helm chart** on local Kubernetes clusters.
 
 ---
 
-### 2. Helm HA — dandydev/redis-ha (what we use instead)
+## What We Built
 
-Same Helm approach, different mode: **Sentinel HA**.
-
-One master holds all data. Replicas copy it. Sentinel is a separate process that
-watches the master — if it dies, sentinel votes and promotes a replica.
+Two fully independent Kubernetes clusters running simultaneously on a single laptop using **kind**
+(Kubernetes in Docker). Each cluster runs a production-grade Redis setup — one managed by an
+operator, one managed by Helm.
 
 ```
-server-0  →  master   (redis + sentinel + config)
-server-1  →  replica  (redis + sentinel + config)
-server-2  →  replica  (redis + sentinel + config)
+Laptop
+├── Docker
+│   ├── Cluster 1: redis-test      (Operator)
+│   │   ├── redis-test-control-plane
+│   │   ├── redis-test-worker
+│   │   └── redis-test-worker2
+│   └── Cluster 2: redis-helm      (Bitnami Helm)
+│       ├── redis-helm-control-plane
+│       ├── redis-helm-worker
+│       └── redis-helm-worker2
 ```
 
-Each pod has 3 containers — redis, sentinel, configmap watcher.
-
-**Helm just deploys.** After install, it walks away. If a pod dies:
-- Kubernetes restarts the container (basic)
-- Sentinel may promote a replica
-- But re-join, slot rebalancing, cluster repair — all manual
+6 Docker containers total. Each container = a Kubernetes node running inside Docker.
+Control-plane nodes handle scheduling only. Workers run the Redis pods.
 
 ---
 
-### 3. Redis Operator — ot-container-kit (what we test)
+## Infrastructure
 
-Operator runs a **reconciliation loop forever**:
+### Why kind over minikube
+
+kind runs each Kubernetes node as a real Docker container — proper multi-node cluster locally.
+Redis Cluster requires a minimum of 3 masters, which needs real node separation for anti-affinity.
+
+### Cluster topology (both clusters identical)
 
 ```
-observe current state → compare to desired → fix diff → repeat
+1 control-plane  →  scheduling only, no workloads
+1 worker         →  Redis pods
+1 worker         →  Redis pods
 ```
 
-Deployed in **Cluster mode** — 3 masters, 3 followers:
+---
+
+## Pod Distribution
+
+### Cluster 1 — Operator (`redis-test`)
 
 ```
-leader-0  →  slots 0–5460      + follower
-leader-1  →  slots 5461–10922  + follower
-leader-2  →  slots 10923–16383 + follower
+redis-test-worker
+├── redis-cluster-leader-0     (master → slots 0–5460)
+├── redis-cluster-leader-2     (master → slots 10923–16383)
+├── redis-cluster-follower-0   (replica)
+└── redis-cluster-follower-2   (replica)
+
+redis-test-worker2
+├── redis-cluster-leader-1     (master → slots 5461–10922)
+├── redis-cluster-follower-1   (replica)
+└── redis-operator             (controller — watches cluster 24/7)
+```
+
+**Total: 7 pods** — 3 leaders + 3 followers + 1 operator
+
+### Cluster 2 — Bitnami Helm (`redis-helm`)
+
+```
+redis-helm-worker
+├── redis-bitnami-redis-cluster-0   (master → slots 0–5460)
+├── redis-bitnami-redis-cluster-2   (master → slots 10923–16383)
+└── redis-bitnami-redis-cluster-5   (replica of cluster-1)
+
+redis-helm-worker2
+├── redis-bitnami-redis-cluster-1   (master → slots 5461–10922)
+├── redis-bitnami-redis-cluster-3   (replica of cluster-2)
+└── redis-bitnami-redis-cluster-4   (replica of cluster-0)
+```
+
+**Total: 6 pods** — 3 masters + 3 replicas
+
+---
+
+## How Redis Cluster Works
+
+16384 hash slots split across 3 masters. Every key hashes to a slot, every slot belongs to a master.
+
+```
+master-0  →  slots 0–5460      ~33% of data
+master-1  →  slots 5461–10922  ~33% of data
+master-2  →  slots 10923–16383 ~33% of data
+```
+
+Each master has 1 replica watching it. If a master dies, its replica promotes via cluster gossip vote.
+
+---
+
+## The Difference
+
+### Bitnami Helm
+
+Helm deploys Redis and walks away. No reconciliation loop. When a pod dies:
+- Kubernetes restarts the container
+- Cluster gossip protocol re-elects master among surviving nodes
+- **Complex failures** (node loss, split-brain, network partition) need `redis-cli cluster fix` manually
+
+### Redis Operator
+
+Operator runs a reconciliation loop forever:
+
+```
+observe current state → compare to desired YAML → fix the diff → repeat
 ```
 
 When a pod dies:
-1. Operator detects missing pod instantly
-2. Recreates it
-3. Re-joins it to the cluster
-4. Rebalances slots if needed
-5. All automatic, in seconds
-
-**This is what Helm cannot do.**
+- Operator detects it instantly (watches Kubernetes API — no timeout)
+- Recreates the pod
+- Re-joins it to the cluster automatically
+- Rebalances slots if needed
+- **All failures** handled automatically including complex ones
 
 ---
 
-## Key Difference
+## Comparison Table
 
-| | Helm HA | Operator |
+| | **Bitnami Helm** | **Redis Operator** |
 |---|---|---|
-| Knows Redis internals | No | Yes |
-| Self-healing | Basic (restart only) | Full (re-join, rebalance) |
-| Failover | Sentinel (manual setup) | Built-in |
+| Mode | Cluster (sharded) | Cluster (sharded) |
+| Masters | 3 | 3 |
+| Replicas | 3 (1 per master) | 3 (1 per leader) |
+| Total pods | 6 | 7 (includes operator) |
+| Data distribution | Hash slots across masters | Hash slots across leaders |
+| Failover mechanism | Cluster gossip protocol | Operator + cluster protocol |
+| Failure detection | Gossip timeout (~15s) | Instant (Kubernetes API watch) |
+| Self-healing | Pod restart only | Re-join + rebalance + promote |
+| Complex failure recovery | Manual | Automatic |
+| Scaling | Manual resharding | Operator handles it |
+| Version upgrades | Manual coordination | Rolling update via operator |
 | Day-2 ops | Manual | Automated |
+| Recovery speed (observed) | ~25 seconds | ~19 seconds |
+| Data survived recovery | Yes | Yes |
+| Image | bitnamilegacy/redis-cluster | quay.io/opstree/redis:v7.0.15 |
+| Free to use | Was (paywalled Aug 2025) | Yes |
+| Production verdict | Requires ops team | Recommended |
 
 ---
 
-## Requirements
+## What Happened During Testing
+
+### Test: Kill a master pod in each cluster
+
+**Seeded a key before killing:**
+
+```bash
+# Operator
+kubectl exec -it redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
+  -- redis-cli set testkey "value"
+
+# Bitnami
+kubectl exec -it redis-bitnami-redis-cluster-0 -n redis-helm --context kind-redis-helm \
+  -- redis-cli -c set testkey "bitnami-value"
+```
+
+**Killed the master pod in both clusters simultaneously.**
+
+**Operator result:**
+- leader-0 detected missing instantly
+- follower-0 promoted to master automatically
+- leader-0 came back as slave in ~19 seconds
+- Data accessible via `MOVED` redirect — cluster protocol routes client automatically
+- Zero manual steps
+
+**Bitnami result:**
+- Pod detected missing via gossip after ~15 second timeout (cluster-node-timeout=15000ms)
+- Remaining masters voted, promoted a replica
+- Pod came back as slave in ~25 seconds
+- Data survived — `bitnami-value` still readable
+- Zero manual steps for basic failure
+- Would need manual intervention for split-brain or node-level failure
+
+### Promotion observed (Operator)
+
+```
+Before kill:   leader-0 = master,  follower-0 = slave
+After kill:    leader-0 = slave,   follower-0 = master  ← promoted
+```
+
+The pod names (leader/follower) are just labels assigned at creation — roles flip based on cluster state.
+
+---
+
+## Image Situation
+
+Bitnami paywalled all container images on **August 28, 2025** — deleted from Docker Hub entirely.
+We found `bitnamilegacy/redis-cluster:latest` — the last free image Bitnami pushed before the paywall
+(built May 30, 2025). Used with the official Bitnami chart via `--set image.*` overrides.
+
+---
+
+## Setup
+
+**Requirements:**
 
 ```bash
 brew install kind helm
 ```
 
----
-
-## Structure
-
-```
-operator/   — Redis Operator cluster: redis-test  (3 leaders, no replicas)
-helm/       — Redis HA Helm cluster: redis-helm   (1 master + 2 replicas)
-```
-
----
-
-## Operator Setup
+**Operator cluster:**
 
 ```bash
 kind create cluster --name redis-test --config operator/kind-config.yaml
@@ -111,69 +219,56 @@ helm install redis-operator ot-helm/redis-operator \
   --set featureGates.GenerateConfigInInitContainer=true
 
 kubectl apply -f operator/redis-cluster.yaml
-kubectl get pods -n ot-operators --context kind-redis-test
+kubectl get pods -n ot-operators --context kind-redis-test -w
 ```
 
-## Helm Setup
+**Bitnami Helm cluster:**
 
 ```bash
 kind create cluster --name redis-helm --config helm/kind-config.yaml
 
-helm repo add dandydev https://dandydeveloper.github.io/charts/
-helm repo update
-helm install redis-ha dandydev/redis-ha \
+helm install redis-bitnami oci://registry-1.docker.io/bitnamicharts/redis-cluster \
+  --version 10.3.0 \
   --namespace redis-helm --create-namespace \
-  -f helm/values.yaml
+  --set auth.enabled=false \
+  --set image.registry=docker.io \
+  --set image.repository=bitnamilegacy/redis-cluster \
+  --set image.tag=latest
 
-kubectl get pods -n redis-helm --context kind-redis-helm
+kubectl get pods -n redis-helm --context kind-redis-helm -w
 ```
 
 ---
 
-## Self-Healing Test
+## Self-Healing Test Commands
 
-### Commands
-
-**Operator** — seed a key, kill a leader, verify recovery:
+**Operator:**
 
 ```bash
 kubectl exec -it redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
   -- redis-cli set testkey "value"
 
 kubectl delete pod redis-cluster-leader-0 -n ot-operators --context kind-redis-test
+
 kubectl get pods -n ot-operators --context kind-redis-test -w
 
 kubectl exec -it redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
-  -- redis-cli cluster nodes
+  -- redis-cli cluster nodes 2>/dev/null | awk '{split($2,a,","); split(a[2],b,"."); print b[1], $3}'
 ```
 
-**Helm** — kill master, watch sentinel promote:
+**Bitnami Helm:**
 
 ```bash
-kubectl delete pod redis-ha-server-0 -n redis-helm --context kind-redis-helm
+kubectl exec -it redis-bitnami-redis-cluster-0 -n redis-helm --context kind-redis-helm \
+  -- redis-cli -c set testkey "value"
+
+kubectl delete pod redis-bitnami-redis-cluster-0 -n redis-helm --context kind-redis-helm
+
 kubectl get pods -n redis-helm --context kind-redis-helm -w
 
-kubectl exec redis-ha-server-1 -n redis-helm --context kind-redis-helm \
-  -c sentinel -- redis-cli -p 26379 sentinel masters
+kubectl exec -it redis-bitnami-redis-cluster-1 -n redis-helm --context kind-redis-helm \
+  -- redis-cli -c cluster nodes 2>/dev/null | awk '{split($2,a,","); split(a[2],b,"."); print b[1], $3}'
 ```
-
----
-
-### Results (observed)
-
-**Operator:**
-- Pod recovered in ~19 seconds
-- follower-0 promoted to master automatically
-- leader-0 came back as slave
-- Data redirected via `MOVED` — cluster protocol handles it, client follows automatically
-- Zero manual intervention
-
-**Helm HA:**
-- server-0 restarted by Kubernetes
-- Sentinel negotiated new master among remaining pods
-- Recovery slower — sentinel needs election timeout before promoting
-- No cluster slot management (HA mode, not cluster mode)
-- If sentinel quorum fails — manual `redis-cli sentinel failover` needed
 
 ---
 

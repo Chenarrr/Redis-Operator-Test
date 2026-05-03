@@ -1,9 +1,13 @@
-replicas: 3
+cluster:
+  enabled: true
 
-auth: false
+redis:
+  replicas: 3
 
-hardAntiAffinity: false
+auth:
+  enabled: false
 
 image:
-  repository: public.ecr.aws/docker/library/redis
-  tag: "8.2.4-alpine"
+  registry: docker.io
+  repository: bitnamilegacy/redis-cluster
+  tag: "latest"
