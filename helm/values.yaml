@@ -1,11 +1,15 @@
-haproxy:
-  enabled: false
+cluster:
+  enabled: true
 
 redis:
-  masterGroupName: redis-ha
+  replicas: 3
 
-replicas: 3
-
-auth: false
+auth:
+  enabled: false
 
 hardAntiAffinity: false
+
+image:
+  registry: docker.io
+  repository: bitnamilegacy/redis-cluster
+  tag: "latest"
