@@ -1,9 +1,13 @@
 cluster:
   enabled: true
-  slaveCount: 1
 
 redis:
   replicas: 3
 
 auth:
   enabled: false
+
+image:
+  registry: docker.io
+  repository: redis
+  tag: 7.2-alpine
