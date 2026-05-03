@@ -52,12 +52,12 @@ Operator runs a **reconciliation loop forever**:
 observe current state → compare to desired → fix diff → repeat
 ```
 
-Deployed in **Cluster mode** — 3 masters, no replicas (for equal comparison):
+Deployed in **Cluster mode** — 3 masters, 3 followers:
 
 ```
-leader-0  →  slots 0–5460
-leader-1  →  slots 5461–10922
-leader-2  →  slots 10923–16383
+leader-0  →  slots 0–5460      + follower
+leader-1  →  slots 5461–10922  + follower
+leader-2  →  slots 10923–16383 + follower
 ```
 
 When a pod dies:
