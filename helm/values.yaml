@@ -7,3 +7,5 @@ redis:
 replicas: 3
 
 auth: false
+
+hardAntiAffinity: false
