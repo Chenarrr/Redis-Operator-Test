@@ -10,4 +10,4 @@ auth:
 image:
   registry: docker.io
   repository: redis
-  tag: 7.2-alpine
+  tag: "7.2"
