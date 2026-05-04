@@ -1,13 +1,21 @@
-cluster:
-  enabled: true
+global:
+  security:
+    allowInsecureImages: true
 
-redis:
-  replicas: 3
+sentinel:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis-sentinel
+    tag: "8.2.1"
+
+replica:
+  replicaCount: 3
 
 auth:
   enabled: false
 
 image:
   registry: docker.io
-  repository: bitnamilegacy/redis-cluster
-  tag: "latest"
+  repository: bitnamilegacy/redis
+  tag: "8.2.1"
