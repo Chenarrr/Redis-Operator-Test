@@ -1,0 +1,20 @@
+apiVersion: redis.redis.opstreelabs.in/v1beta2
+kind: RedisSentinel
+metadata:
+  name: redis-sentinel
+  namespace: ot-operators
+spec:
+  clusterSize: 3
+  podSecurityContext:
+    runAsUser: 1000
+    fsGroup: 1000
+  kubernetesConfig:
+    image: quay.io/opstree/redis-sentinel:v8.6.2
+    imagePullPolicy: Always
+  redisSentinelConfig:
+    redisReplicationName: redis-replication
+    masterGroupName: mymaster
+    quorum: "2"
+    downAfterMilliseconds: "60000"
+    failoverTimeout: "180000"
+    parallelSyncs: "1"
