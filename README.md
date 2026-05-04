@@ -278,3 +278,16 @@ kubectl exec -it redis-bitnami-redis-cluster-1 -n redis-helm --context kind-redi
 kind delete cluster --name redis-test
 kind delete cluster --name redis-helm
 ```
+
+---
+
+## References
+
+| Resource | Link |
+|---|---|
+| Redis Operator guide | https://ot-container-kit.github.io/redis-operator/guide/ |
+| RedisCluster config reference | https://ot-container-kit.github.io/redis-operator/guide/redis-cluster-config.html |
+| GitHub — redis-operator | https://github.com/OT-CONTAINER-KIT/redis-operator |
+| Redis Cluster spec (hash slots, gossip, failover) | https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/ |
+| kind (Kubernetes in Docker) | https://github.com/kubernetes-sigs/kind |
+| Bitnami redis-cluster Helm chart | https://github.com/bitnami/charts/tree/main/bitnami/redis-cluster |
