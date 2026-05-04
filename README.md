@@ -252,8 +252,9 @@ kubectl delete pod redis-cluster-leader-0 -n ot-operators --context kind-redis-t
 
 kubectl get pods -n ot-operators --context kind-redis-test -w
 
-kubectl exec -it redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
-  -- redis-cli cluster nodes 2>/dev/null | awk '{split($2,a,","); split(a[2],b,"."); print b[1], $3}'
+kubectl exec redis-cluster-leader-0 -n ot-operators --context kind-redis-test \
+  -- redis-cli cluster nodes 2>/dev/null | \
+  awk '{split($2,a,","); split(a[2],b,"."); printf "%-35s %-20s %s\n", b[1], $3, $9}'
 ```
 
 **Bitnami Helm:**
@@ -266,8 +267,17 @@ kubectl delete pod redis-bitnami-redis-cluster-0 -n redis-helm --context kind-re
 
 kubectl get pods -n redis-helm --context kind-redis-helm -w
 
-kubectl exec -it redis-bitnami-redis-cluster-1 -n redis-helm --context kind-redis-helm \
-  -- redis-cli -c cluster nodes 2>/dev/null | awk '{split($2,a,","); split(a[2],b,"."); print b[1], $3}'
+kubectl exec redis-bitnami-redis-cluster-1 -n redis-helm --context kind-redis-helm \
+  -- redis-cli -c cluster nodes 2>/dev/null | \
+  while read line; do
+    ip=$(echo "$line" | awk '{split($2,a,":"); print a[1]}')
+    pod=$(kubectl get pods -n redis-helm --context kind-redis-helm --no-headers \
+      -o custom-columns="NAME:.metadata.name,IP:.status.podIP" 2>/dev/null | \
+      awk -v i="$ip" '$2==i{print $1}')
+    role=$(echo "$line" | awk '{print $3}')
+    slots=$(echo "$line" | awk '{print $9}')
+    printf "%-40s %-20s %s\n" "${pod:-$ip}" "$role" "$slots"
+  done
 ```
 
 ---
