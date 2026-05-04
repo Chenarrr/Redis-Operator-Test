@@ -6,8 +6,8 @@ Side-by-side comparison of Redis self-healing, performance, backup, and migratio
 |---|---|---|
 | Operator version | v0.24.0 | — |
 | Chart version | ot-helm/redis-operator | bitnamicharts/redis v20.6.3 |
-| Redis version | 7.0.15 | 8.2.1 |
-| Image | quay.io/opstree/redis:v7.0.15 | bitnamilegacy/redis:8.2.1 |
+| Redis version | 8.6.2 | 8.2.1 |
+| Image | quay.io/opstree/redis:v8.6.2 | bitnamilegacy/redis:8.2.1 |
 | Mode | Cluster (sharded) | Sentinel (single master) |
 
 ---
@@ -139,7 +139,7 @@ in that case. If the Redis process comes back within 60s, the old master returns
 | Rolling upgrades | Manual | Operator coordinates |
 | Day-2 ops | Manual | Automated |
 | Data survived recovery | Yes | Yes |
-| Redis version | 8.2.1 | 7.0.15 |
+| Redis version | 8.2.1 | 8.6.2 |
 | Image source | bitnamilegacy (last free, Aug 2025) | quay.io/opstree (always free) |
 | Production fit | Simple HA, small datasets | Recommended for scale |
 
@@ -324,7 +324,7 @@ spec:
     quorum: "2"
     downAfterMilliseconds: "60000"
   kubernetesConfig:
-    image: quay.io/opstree/redis:v7.0.15
+    image: quay.io/opstree/redis:v8.6.2
     imagePullPolicy: IfNotPresent
 ```
 
@@ -416,7 +416,7 @@ helm install redis-operator ot-helm/redis-operator \
   --create-namespace \
   --set featureGates.GenerateConfigInInitContainer=true
 
-# 4. Deploy the RedisCluster CRD (3 leaders + 3 followers, Redis v7.0.15)
+# 4. Deploy the RedisCluster CRD (3 leaders + 3 followers, Redis v8.6.2)
 kubectl apply -f ot-operator/redis-operator-crd.yaml
 
 # 5. Watch pods come up (~2 min)
@@ -584,7 +584,7 @@ Bitnami paywalled all container images on **August 28, 2025** — deleted from D
 Used with `bitnamicharts/redis` v20.6.3 via `global.security.allowInsecureImages: true`
 in `bitnami-sentinel/helm-values.yaml`.
 
-OT Operator uses `quay.io/opstree/redis:v7.0.15` — always free.
+OT Operator uses `quay.io/opstree/redis:v8.6.2` — always free.
 
 ---
 

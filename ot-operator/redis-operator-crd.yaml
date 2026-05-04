@@ -5,7 +5,7 @@ metadata:
   namespace: ot-operators
 spec:
   clusterSize: 3
-  clusterVersion: v7
+  clusterVersion: v8
   redisFollower:
     replicas: 3
   podSecurityContext:
@@ -13,7 +13,7 @@ spec:
     fsGroup: 1000
   persistenceEnabled: true
   kubernetesConfig:
-    image: quay.io/opstree/redis:v7.0.15
+    image: quay.io/opstree/redis:v8.6.2
     imagePullPolicy: Always
   storage:
     volumeClaimTemplate:
