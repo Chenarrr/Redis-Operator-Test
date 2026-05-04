@@ -133,8 +133,8 @@ When a pod dies:
 | Total pods | 6 | 7 (includes operator) |
 | Data distribution | Hash slots across masters | Hash slots across leaders |
 | Failover mechanism | Cluster gossip protocol | Operator + cluster protocol |
-| Failure detection | Gossip timeout (~15s) | Instant (Kubernetes API watch) |
-| Self-healing | Pod restart only | Re-join + rebalance + promote |
+| Failure detection | Gossip timeout (~15s) | Instant (K8s API watch) + periodic loop every ~12s |
+| Self-healing | Pod restart only (promotion only if down > 15s) | Re-join + rebalance + promote (always) |
 | Complex failure recovery | Manual | Automatic |
 | Scaling | Manual resharding | Operator handles it |
 | Version upgrades | Manual coordination | Rolling update via operator |
@@ -173,10 +173,10 @@ kubectl exec -it redis-bitnami-redis-cluster-0 -n redis-helm --context kind-redi
 - Zero manual steps
 
 **Bitnami result:**
-- Pod detected missing via gossip after ~15 second timeout (cluster-node-timeout=15000ms)
-- Remaining masters voted, promoted a replica
-- Pod came back as slave in ~25 seconds
-- Data survived — `bitnami-value` still readable
+- Relies on gossip timeout (cluster-node-timeout=15000ms) to declare a node dead
+- If the pod restarts faster than 15s (cached image = ~7s), gossip never fires — **no promotion, pod comes back as master**
+- Only promotes if the pod stays down longer than 15s (e.g. node-level failure, slow image pull)
+- Data survived either way
 - Zero manual steps for basic failure
 - Would need manual intervention for split-brain or node-level failure
 
@@ -237,6 +237,18 @@ helm install redis-bitnami oci://registry-1.docker.io/bitnamicharts/redis-cluste
 
 kubectl get pods -n redis-helm --context kind-redis-helm -w
 ```
+
+---
+
+## Watch Operator Reconciliation Loop
+
+```bash
+kubectl logs -f redis-operator-58c8bb9c8b-dcxk8 -n ot-operators --context kind-redis-test \
+  | grep --line-buffered "Number of Redis nodes\|reconcileID" \
+  | awk '{print $2, $NF}'
+```
+
+Fires every ~10 seconds (hardcoded). Interval not configurable via Helm or flags — would require recompiling the operator.
 
 ---
 
