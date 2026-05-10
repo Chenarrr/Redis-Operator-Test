@@ -83,82 +83,6 @@ redis-helm-worker2
 
 **3 pods, 6 containers** — 1 master + 2 slaves, each pod runs redis + sentinel as a sidecar
 
----
-
-## Architecture
-
-### The only real difference: where sentinel lives
-
-Both setups run the **same Redis Sentinel protocol**. Sentinel is what detects master failure,
-votes, and triggers promotion. The `down-after-milliseconds` timer, quorum vote, and promotion
-logic are identical. The operator does **not** replace sentinel — it manages Kubernetes resources
-(pods, config, CRDs) but the actual Redis failover is always done by sentinel.
-
-**Bitnami — sentinel is a sidecar inside each Redis pod:**
-
-```
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  redis-bitnami-node-0│  │  redis-bitnami-node-1│  │  redis-bitnami-node-2│
-│  [redis master]      │  │  [redis replica]     │  │  [redis replica]     │
-│  [sentinel sidecar]  │  │  [sentinel sidecar]  │  │  [sentinel sidecar]  │
-└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
-```
-
-Master pod crashes → redis AND its sentinel die in the same pod:
-
-```
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  redis-bitnami-node-0│  │  redis-bitnami-node-1│  │  redis-bitnami-node-2│
-│  [redis master] 💀   │  │  [redis replica] ✓   │  │  [redis replica] ✓   │
-│  [sentinel]     💀   │  │  [sentinel]      ✓   │  │  [sentinel]      ✓   │
-└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
-
-3 sentinels → 2 survive
-quorum = 2 → met, but barely
-2 sentinels wait 60s → vote → promote node-1 or node-2
-```
-
-**OT Operator — sentinel runs in dedicated separate pods (RedisSentinel CRD):**
-
-```
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  redis-replication-0 │  │  redis-replication-1 │  │  redis-replication-2 │
-│  [redis master]      │  │  [redis replica]     │  │  [redis replica]     │
-└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
-
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  redis-sentinel-0    │  │  redis-sentinel-1    │  │  redis-sentinel-2    │
-│  [sentinel]          │  │  [sentinel]          │  │  [sentinel]          │
-└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
-```
-
-Master pod crashes → only the Redis pod dies, all 3 sentinels survive:
-
-```
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  redis-replication-0 │  │  redis-replication-1 │  │  redis-replication-2 │
-│  [redis master] 💀   │  │  [redis replica] ✓   │  │  [redis replica] ✓   │
-└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
-
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  redis-sentinel-0 ✓  │  │  redis-sentinel-1 ✓  │  │  redis-sentinel-2 ✓  │
-│  still alive         │  │  still alive         │  │  still alive         │
-└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
-
-3 sentinels → all 3 survive
-quorum = 2 → easily met
-all 3 sentinels wait 60s → vote → promote replication-1 or replication-2
-```
-
-**What the operator adds on top of sentinel:**
-
-The operator controller (separate pod) runs a reconciliation loop every ~10s. It does not
-touch Redis failover — that is 100% sentinel's job. What the operator does:
-
-- Watches K8s events — when a pod comes back, operator ensures it rejoins as replica (not master)
-- Ensures CRD spec is always enforced — if someone manually changes config, operator reverts it
-- Handles rolling upgrades, config changes, scaling without manual kubectl
-- Bitnami Helm walks away after install — no reconciliation, no enforcement
 
 ---
 
@@ -270,17 +194,9 @@ EOF
 
 Works for both setups — any PVC-backed Redis.
 
-### Option 4 — Velero (full cluster backup)
 
-Backs up Kubernetes objects + PVC data together.
 
-```bash
-velero install --provider aws --bucket my-bucket --secret-file ./credentials
-velero backup create redis-backup --include-namespaces ot-operators
-velero restore create --from-backup redis-backup
-```
-
-### Option 5 — RIOT (key-level export, best for cross-cluster migration)
+### Option 4 — RIOT (key-level export, best for cross-cluster migration)
 
 ```bash
 brew install redis/tap/riot
@@ -298,97 +214,7 @@ riot replicate \
 | RDB snapshot | Point-in-time | Fast | Nothing extra | Simple, periodic backups |
 | AOF | Near real-time | Slower (replay log) | Disk space | Zero data loss requirement |
 | PVC snapshot | Point-in-time | Fast | CSI driver | Kubernetes-native workflows |
-| Velero | Full cluster | Medium | Object storage | Disaster recovery |
 | RIOT | Key-level | Depends on size | Extra tooling | Cross-cluster migration |
-
----
-
-## Migration
-
-### Bitnami Sentinel → OT Operator Sentinel
-
-Same topology on both ends — sentinel protocol, port (26379), and master name stay identical.
-No client changes required.
-
-**Step 1 — deploy OT operator cluster**
-
-```bash
-kind create cluster --name redis-test --config ot-operator/kind-config.yaml
-helm repo add ot-helm https://ot-container-kit.github.io/helm-charts/ && helm repo update
-helm install redis-operator ot-helm/redis-operator \
-  --namespace ot-operators --create-namespace \
-  --set featureGates.GenerateConfigInInitContainer=true
-kubectl apply -f ot-operator/redis-replication-crd.yaml
-kubectl apply -f ot-operator/redis-sentinel-crd.yaml
-kubectl get pods -n ot-operators --context kind-redis-test -w
-```
-
-**Step 2 — live-sync data with RIOT**
-
-```bash
-brew install redis/tap/riot
-
-riot replicate \
-  --source-uri "redis-sentinel://<bitnami-sentinel-host>:26379?master=mymaster" \
-  --target-uri "redis-sentinel://<ot-sentinel-host>:26379?master=mymaster" \
-  --mode live
-```
-
-RIOT keeps syncing until you cut over — zero downtime window.
-
-**Step 3 — cut over app, decommission Bitnami**
-
-Update app connection string from Bitnami sentinel host → OT operator sentinel host. Same port, same master name.
-
-```bash
-helm uninstall redis-bitnami -n redis-helm
-kind delete cluster --name redis-helm
-```
-
-**Watch out for:**
-- `down-after-milliseconds` resets to operator default (60000) — re-apply your value in the CRD spec if different
-- Quorum must be set correctly: minimum `(replicas/2)+1` → 2 for 3 replicas
-- Test failover in staging before production cutover
-
----
-
-### OT Operator Sentinel → Bitnami Sentinel
-
-Reverse path — switching from operator-managed to Helm-managed. Same sentinel protocol on both ends.
-
-**Step 1 — deploy Bitnami cluster**
-
-```bash
-kind create cluster --name redis-helm --config bitnami-sentinel/kind-config.yaml
-helm install redis-bitnami oci://registry-1.docker.io/bitnamicharts/redis \
-  --version 20.6.3 \
-  --namespace redis-helm --create-namespace \
-  -f bitnami-sentinel/helm-values.yaml
-kubectl get pods -n redis-helm --context kind-redis-helm -w
-```
-
-**Step 2 — live-sync data with RIOT**
-
-```bash
-riot replicate \
-  --source-uri "redis-sentinel://<ot-sentinel-host>:26379?master=mymaster" \
-  --target-uri "redis-sentinel://<bitnami-sentinel-host>:26379?master=mymaster" \
-  --mode live
-```
-
-**Step 3 — cut over app, decommission OT Operator**
-
-```bash
-kubectl delete -f ot-operator/redis-sentinel-crd.yaml
-kubectl delete -f ot-operator/redis-replication-crd.yaml
-helm uninstall redis-operator -n ot-operators
-kind delete cluster --name redis-test
-```
-
-**Watch out for:**
-- Bitnami paywalled images after Aug 28 2025 — only `bitnamilegacy` tags remain free (see Image Situation below)
-- No reconciliation loop after migration — day-2 ops become manual again
-- If master crashes and pod restarts within 60s, sentinel won't promote — pod returns as master (Bitnami behavior, not a bug)
 
 ---
 
@@ -636,5 +462,3 @@ OT Operator uses `quay.io/opstree/redis:v8.6.2` — always free, actively mainta
 | Bitnami redis Helm chart | https://github.com/bitnami/charts/tree/main/bitnami/redis |
 | Redis Sentinel docs | https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/ |
 | RIOT — Redis migration tool | https://developer.redis.com/riot/ |
-| Velero — K8s backup | https://velero.io/ |
-| kind (Kubernetes in Docker) | https://github.com/kubernetes-sigs/kind |
